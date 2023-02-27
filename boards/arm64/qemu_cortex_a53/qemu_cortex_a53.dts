@@ -21,7 +21,7 @@
 		zephyr,sram = &sram0;
 		zephyr,console = &uart0;
 		zephyr,shell-uart = &uart0;
-		zephyr,flash = &flash0;
+		zephyr,flash = &flash1;
 		zephyr,pcie-controller = &pcie;
 	};
 
@@ -32,6 +32,17 @@
 		};
 
 	};
+
+	flash1: flash@1 {
+			status = "okay";
+			compatible = "snps,qspi-nor";
+			clock-frequency = <62500000>;
+			/* As this is pointed to by zephyr,flash we can only handle
+			 * one value in the reg property, so we comment out the
+			 * second flash bank for now
+			 */
+			reg = <0x0 0x0 0x0 DT_SIZE_M(64) /* 0x4000000 DT_SIZE_M(64) */>;
+		};
 };
 
 &uart0 {

@@ -134,4 +134,6 @@ source "drivers/flash/Kconfig.gd32"
 
 source "drivers/flash/Kconfig.xmc4xxx"
 
+source "drivers/flash/Kconfig.dw_qspi"
+
 endif # FLASH

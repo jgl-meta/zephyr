@@ -1,0 +1,11 @@
+# Copyright (c) 2023 Meta
+# SPDX-License-Identifier: Apache-2.0
+
+config FLASH_DW_QSPI_NOR
+	bool "Designware Quad SPI Flash driver"
+	default y
+	depends on DT_HAS_SNPS_QSPI_NOR_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_DRIVER_ENABLED
+	help
+	  Enable Designware QSPI-NOR support.
