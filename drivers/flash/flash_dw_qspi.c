@@ -7,6 +7,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/flash.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 
 #define DT_DRV_COMPAT snps_qspi_nor
 
@@ -80,6 +81,87 @@ void dw_spi_enable(const bool enable) {
 	DW_SPI_SET_REG_FIELD(SSIENR, SSIC_EN, (enable) ? 1 : 0);
 }
 
+bool dw_spi_idle(void) {
+	return (DW_SPI_GET_REG_FIELD(SR, TFE) &&
+		DW_SPI_GET_REG_FIELD(SR, TFNF) &&
+		!DW_SPI_GET_REG_FIELD(SR, BUSY));
+}
+
+static int dw_spi_trans_completed(const uint32_t drain_timeout_ms)
+{
+	int64_t start_time = k_uptime_get();
+	int64_t uptime;
+
+	while (!dw_spi_idle()) {
+		uptime = k_uptime_get();
+		if (uptime >= start_time + drain_timeout_ms)
+			return -ETIMEDOUT;
+	}
+	return 0;
+}
+
+static int dw_spi_rx_bytes(uint8_t *rx, uint32_t rx_len)
+{
+	uint32_t i;
+	int64_t start_time = k_uptime_get();
+	int64_t uptime;
+
+	if (rx_len > DW_SPI_RX_FIFO_LEN) {
+		LOG_ERR("Rx len %d greater than max %d\n",
+		      rx_len, DW_SPI_RX_FIFO_LEN);
+		return -ERANGE;
+	}
+
+	/* simply read it out from the fifo */
+	for (i = 0; i < rx_len; i++) {
+		uint32_t reg;
+
+		while (DW_SPI_GET_REG_FIELD(RXFLR, RXTFL) == 0) {
+			uptime = k_uptime_get();
+			if (uptime >= start_time + CONFIG_DW_SPI_READ_TIMEOUT_MS)
+				return -EIO;
+		}
+
+		reg = sys_read32(LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS);
+		LOG_DBG("%s: Reading %d value 0x%x\n", __func__, i, reg);
+		*rx++ = reg;
+	}
+
+	return 0;
+}
+
+static int dw_spi_tx_bytes(uint8_t *tx, uint32_t tx_len) {
+	int ret;
+	uint32_t i;
+	uint32_t data;
+
+	/* as we park everytime after use, we should be idle */
+	if (!dw_spi_idle())
+		return -EPERM;
+
+	if (tx_len > DW_SPI_TX_FIFO_LEN) {
+		LOG_ERR("Tx len %d greater than max %d\n",
+		      tx_len, DW_SPI_TX_FIFO_LEN);
+		return -ERANGE;
+	}
+
+	DW_SPI_SET_REG_FIELD(TXFTLR, TFT, 0);
+	DW_SPI_SET_REG_FIELD(TXFTLR, TXFTHR, tx_len - 1);
+	for (i = 0; i < tx_len; i++) {
+		data = *tx++;
+		LOG_DBG("%s(): Write reg 0x%x with data 0x%x\n",
+		      __func__, LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS, data);
+		sys_write32(data, LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS);
+	}
+
+	/* wait for draining */
+	ret = dw_spi_trans_completed(CONFIG_DW_SPI_DRAIN_TIMEOUT_MS);
+	if (ret)
+		LOG_ERR("%s: Timeout %d ms on waiting for %d tx\n",
+		      __func__, CONFIG_DW_SPI_DRAIN_TIMEOUT_MS, tx_len);
+	return ret;
+}
+
 int dw_spi_transfer(const struct device *dev, uint8_t *tx, uint32_t tx_len,
 		    uint8_t *rx, uint32_t rx_len) {
 	int ret;
@@ -110,18 +192,45 @@ int dw_spi_transfer(const struct device *dev, uint8_t *tx, uint32_t tx_len,
 	dw_spi_enable(true);
 
 	/* Send command and optionally address + data */
-	ret = dw_spi_tx_bytes(dev, tx, tx_len);
+	ret = dw_spi_tx_bytes(tx, tx_len);
 	if (ret)
 		goto done;
 
 	if (duplex) {
 		/* Read data */
-		ret = dw_spi_rx_bytes(dev, rx, rx_len);
+		ret = dw_spi_rx_bytes(rx, rx_len);
 		if (ret)
 			goto done;
 	}
 
 done:
+	return ret;
+}
+
+int dw_spi_proc_completed(const struct device *dev, const uint32_t comp_timeout_ms)
+{
+	int ret;
+	uint8_t cmd, stat;
+	int64_t start_time = k_uptime_get();
+	int64_t uptime;
+	struct flash_dw_qspi_data *qspi_data = (struct flash_dw_qspi_data*) dev->data;
+	struct qspi_cmd_info *p_cmd = &qspi_data->command_info;
+
+	do {
+		cmd = p_cmd->read_status;
+		ret = dw_spi_transfer(dev, &cmd, sizeof(cmd),
+				      &stat, sizeof(stat));
+		if (ret)
+			break;
+
+		if (!(stat & (0x1 << p_cmd->busy_bit_pos)))
+			break;
+
+		uptime = k_uptime_get();
+		if (uptime >= start_time + comp_timeout_ms)
+			return -ETIMEDOUT;
+	} while (1);
+
 	return ret;
 }
 
@@ -139,6 +248,8 @@ static int dw_spi_aligned_write(const struct device *dev,
 	int ret = 0;
 	uint32_t spi_frf, clk_stretch;
 	uint8_t command;
+	struct flash_dw_qspi_data *qspi_data = (struct flash_dw_qspi_data*) dev->data;
+	struct flash_dw_qspi_config *cfg = (struct flash_dw_qspi_config*) dev->config;
 
 	/* retrive parameters that need to be restored */
 	spi_frf = DW_SPI_GET_REG_FIELD(CTRLR0, SPI_FRF);
@@ -148,7 +259,7 @@ static int dw_spi_aligned_write(const struct device *dev,
 	once = false;
 	while ((remaining) || (!once)) {
 		once = true;
-		write_sz = min(remaining, MAX_BYTE_PER_TRANS);
+		write_sz = MIN(remaining, MAX_BYTE_PER_TRANS);
 		/* always assume 4byte alignment */
 		write_wd = (write_sz >> 2);
 
@@ -158,7 +269,7 @@ static int dw_spi_aligned_write(const struct device *dev,
 		 * The addrl and dfs change will not affect this command
 		 * as it does not have address or data.
 		 */
-		command = dd->command_info.write_enable;
+		command = qspi_data->command_info.write_enable;
 		ret = dw_spi_transfer(dev, &command, sizeof(command), NULL, 0);
 		if (ret)
 			break;
@@ -169,7 +280,7 @@ static int dw_spi_aligned_write(const struct device *dev,
 		DW_SPI_SET_REG_FIELD(SPI_CTRLR0, CLK_STRETCH_EN, 0);
 
 		/* lane mode is based on configuration */
-		DW_SPI_SET_REG_FIELD(CTRLR0, SPI_FRF, dd->pp_lanes);
+		DW_SPI_SET_REG_FIELD(CTRLR0, SPI_FRF, cfg->pp_lanes);
 
 		/* always 32bit for DFS and TX_ONLY */
 		DW_SPI_SET_REG_FIELD(CTRLR0, DFS, DEFAULT_DATA_TRANS_BIT_SZ - 1);
@@ -183,13 +294,13 @@ static int dw_spi_aligned_write(const struct device *dev,
 		 */
 		thre = (addrl != ADDR_L0) ? write_wd + 1 : write_wd;
 		DW_SPI_SET_REG_FIELD(TXFTLR, TXFTHR, thre);
-		DEBUG("CmdCode 0x%x, addrl 0x%x addr 0x%x, write_wd %d thre %d\n",
+		LOG_DBG("CmdCode 0x%x, addrl 0x%x addr 0x%x, write_wd %d thre %d\n",
 		      cmd_code, addrl, addr, write_wd, thre);
 
 		/* start pushing to DR */
-		sys_write32(cmd_code, DW_SPI_DR);
+		sys_write32(cmd_code, LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS);
 		if (addrl != ADDR_L0) {
-			sys_write32(addr, DW_SPI_DR);
+			sys_write32(addr, LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS);
 			addr += write_sz;
 		}
 		for (i = 0; i < write_wd; i++) {
@@ -197,11 +308,11 @@ static int dw_spi_aligned_write(const struct device *dev,
 			word = *w_p++;
 			word = BSWAP_32(word);
 
-			sys_write32(word, DW_SPI_DR);
+			sys_write32(word, LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_DR0__ADDRESS);
 		}
 
 		/* wait until all drained on DW core */
-		ret = dw_spi_trans_completed(DW_SPI_DRAIN_TIMEOUT_MS);
+		ret = dw_spi_trans_completed(CONFIG_DW_SPI_DRAIN_TIMEOUT_MS);
 
 		/* always restore parameters after write */
 		dw_spi_enable(false);
@@ -215,7 +326,7 @@ static int dw_spi_aligned_write(const struct device *dev,
 			break;
 
 		/* wait until write is complete on the flash */
-		ret = dw_spi_proc_completed(dd, DW_SPI_DRAIN_TIMEOUT_MS);
+		ret = dw_spi_proc_completed(dev, CONFIG_DW_SPI_DRAIN_TIMEOUT_MS);
 		if (ret)
 			break;
 
@@ -424,7 +535,23 @@ static int flash_dw_qspi_init(const struct device *dev) {
 	}
 	dw_spi_enable(true);
 
-    return ret;
+		ret = dw_spi_send_cmd(dev, QSPI_SPANSION_CMD_WRR, QSPI_SPANSION_WRR_QUAD_MODE_CMD, 2 /* cfg + stat reg */);
+	if (ret)
+		goto fail;
+
+	/* read back cfg bits and verify */
+	command = QSPI_SPANSION_CMD_RDCR;
+	ret = dw_spi_transfer(dev, &command, sizeof(command),
+			      &resp, sizeof(resp));
+	if (ret)
+		goto fail;
+
+	LOG_INF("Flash QUAD mode set completed - CR 0x%x\n", resp);
+
+	if (!(resp & (1 << QSPI_SPANSION_CFG_QUAD_BIT_POS)))
+		ret = -EPERM;
+fail:
+	return ret;
 }
 
 #define DEFINE_DW_QSPI(inst) 									\

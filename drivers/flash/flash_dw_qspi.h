@@ -300,21 +300,58 @@
 #define QSPI_SPANSION_CMD_1_1_2_WRITE		0xa2
 #define QSPI_SPANSION_CMD_1_1_4_WRITE		0x32
 
+#define QSPI_SPANSION_CMD_WRITE			0x32
+#define QSPI_SPANSION_CMD_WRR			0x01
+#define QSPI_SPANSION_CMD_CHIP_ERASE		0xc7
+#define QSPI_SPANSION_CMD_WRITE_ENABLE		0x06
+#define QSPI_SPANSION_CMD_WRITE_DISABLE		0x04
+#define QSPI_SPANSION_CMD_READ_STATUS		0x05
+#define QSPI_SPANSION_CMD_READ_EXT_ADDR		0x16
+#define QSPI_SPANSION_CMD_WRITE_EXT_ADDR	0x17
+#define QSPI_SPANSION_CMD_SRESET		0xf0
+#define QSPI_SPANSION_CMD_RDCR			0x35
+
 #define QSPI_SPANSION_1_1_2_READ_DUMMY		8
 #define QSPI_SPANSION_1_1_4_READ_DUMMY		8
+
+/* qual mode wrr value, setting QUAD bit in cfg + WENL in status */
+#define QSPI_SPANSION_WRR_QUAD_MODE_CMD		0x0202
+
+/* cfg bit quad_mode */
+#define QSPI_SPANSION_CFG_QUAD_BIT_POS		1
+
+/* Status bit positions */
+#define QSPI_SPANSION_CMD_BUSY_BIT_POS		0
+
+/* Number of address bits in 4 byte addr mode */
+#define QSPI_SPANSION_CMD_NUM_ADDR_BITS		32
 
 #define DW_SPI_ENABLE  (1)
 #define DW_SPI_DISABLE (0)
 
 #define DW_SPI_NDF_DEFAULT			0x7
 
+#define DW_SPI_TX_FIFO_LEN \
+	(1 << LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_TXFTLR_DATA__TFT__WIDTH)
+#define DW_SPI_RX_FIFO_LEN \
+	(1 << LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_RXFTLR_DATA__RFT__WIDTH)
+
 /* 2 below is because 1 word for inst and one for addr */
 #define MAX_WORD_PER_TRANS (DW_SPI_TX_FIFO_LEN - 2)
 #define MAX_BYTE_PER_TRANS (MAX_WORD_PER_TRANS * sizeof(uint32_t))
 
+/* Default DFS size to have byte */
 #define DEFAULT_DFS_BIT_SZ            (8)
+/* Data transfer/write dfs size */
+#define DEFAULT_DATA_TRANS_BIT_SZ    (32)
 
 #define GET_MASK(n) ((0x1UL << (n)) - 1)
+
+/* Macro for swapping the byte order of a 32 bits unsigned integer */
+#define BSWAP_32(x) ((uint32_t) ((((x) >> 24) & 0xff) | \
+				 (((x) >> 8) & 0xff00) | \
+				 (((x) & 0xff00) << 8) | \
+				 (((x) & 0xff) << 24)))
 
 #define QSPI_CLOCK_POL(_cfg)	((_cfg)->clk_pol)
 #define QSPI_CLOCK_PHASE(_cfg)	((_cfg)->clk_pha)

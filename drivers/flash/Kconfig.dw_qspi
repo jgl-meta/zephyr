@@ -9,3 +9,25 @@ config FLASH_DW_QSPI_NOR
 	select FLASH_HAS_DRIVER_ENABLED
 	help
 	  Enable Designware QSPI-NOR support.
+
+if FLASH_DW_QSPI_NOR
+
+config DW_SPI_DRAIN_TIMEOUT_MS
+	int "Time to wait for QSPI operations to complete in milliseconds."
+	default 20000
+	help
+		Default timeout parameter for QSPI operations.
+
+config DW_SPI_READ_TIMEOUT_MS
+	int "Time to wait for QSPI read operations before timing out in milliseconds."
+	default 100
+	help
+		Default timeout parameter for QSPI read operations.
+
+config FLASH_JESD216_API
+	bool "Designware Quad SPI Flash driver"
+	default n
+	help
+		Enables the JESD216 api functions.
+
+endif
