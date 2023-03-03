@@ -11,4 +11,12 @@ properties:
   clock-frequency:
     type: int
     required: true
-    description: clock frequency information for Designware QSPI NOR Flash
+    description: Clock frequency information for Designware QSPI NOR Flash
+  ahb-bus-frequency:
+    type: int
+    required: true
+    description: Default AHB bus frequency for Designware QSPI Flash
+  pp-lanes:
+    type: int
+    required: true
+    description: Number of pp lanes to use in page program
