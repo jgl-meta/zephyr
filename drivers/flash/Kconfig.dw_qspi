@@ -1,5 +1,5 @@
-# Copyright (c) 2023 Meta
-# SPDX-License-Identifier: Apache-2.0
+#Copyright(c) 2023 Meta
+#SPDX - License - Identifier : Apache - 2.0
 
 config FLASH_DW_QSPI_NOR
 	bool "Designware Quad SPI Flash driver"
