@@ -24,6 +24,12 @@ config DW_SPI_READ_TIMEOUT_MS
 	help
 		Default timeout parameter for QSPI read operations.
 
+config DW_ERASE_SECTION_SIZE
+	int "The size in KB to erase in a section"
+	default 262144
+	help
+		Default section size to erase default is 256 * 1024 has to be in multiples of 256KB
+
 config FLASH_JESD216_API
 	bool "Designware Quad SPI Flash driver"
 	default n

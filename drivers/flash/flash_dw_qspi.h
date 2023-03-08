@@ -292,6 +292,11 @@
 #define LS_QSPI_REGS_SSIC_ADDRESS_BLOCK2_XIP_CTRL_DATA__FRF__WIDTH		  2
 #define LS_QSPI_REGS_SSIC_ADDRESS_BLOCK2_XIP_CTRL_DATA__FRF__LSB		  0
 
+#define XIP_MMAPED_START \
+	LS_QSPI_FLASH_LS_QSPI_FLASH_DUMMY__ADDRESS
+
+#define FLASH_PAGE_SIZE	   256
+
 #define QSPI_SPANSION_CMD_FAST_READ   0x0b
 #define QSPI_SPANSION_CMD_1_1_2_READ  0x3b
 #define QSPI_SPANSION_CMD_1_2_2_READ  0xbb
@@ -310,6 +315,7 @@
 #define QSPI_SPANSION_CMD_WRITE_EXT_ADDR 0x17
 #define QSPI_SPANSION_CMD_SRESET	 0xf0
 #define QSPI_SPANSION_CMD_RDCR		 0x35
+#define QSPI_SPANSION_CMD_ERASE_256K		0xd8
 
 #define QSPI_SPANSION_1_1_2_READ_DUMMY 8
 #define QSPI_SPANSION_1_1_4_READ_DUMMY 8
@@ -330,6 +336,28 @@
 #define DW_SPI_DISABLE (0)
 
 #define DW_SPI_NDF_DEFAULT 0x7
+
+#define SIZE_16MB (1024 * 1024 * 16)
+#define MBYTE_SZ(_sz)   ((_sz) << 20)
+#define IS_EXT_ADDR(_a)    (((_a) >= SIZE_16MB) ? 1 : 0)
+#define SADDR_BYTES        (3)
+#define XADDR_BYTES        (4)
+
+#define IO_PAD_CONTROL	CRM_CFG_CRM_CHIP_IO_PAD_CONTROL__ADDRESS
+#define CRM_LS_FORCE_OEB_TO_INPUT		0
+
+#define QSPI_SPANSION_MFG_ID		0x01
+#define QSPI_JEDEC_READ_MFG_ID_COMMAND	0x9F
+
+#define EXT_ADDR_DISABLED 0x00
+#define EXT_ADDR_ENABLED 0x80
+
+/*
+ * per operation needs to take into consideration of crossing
+ * the 16M boundary, and if so happens, the operation has to
+ * be divided into 2 sub tasks.
+ */
+#define MAX_SUB_ADDR				(2)
 
 #define DW_SPI_TX_FIFO_LEN (1 << LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_TXFTLR_DATA__TFT__WIDTH)
 #define DW_SPI_RX_FIFO_LEN (1 << LS_QSPI_REGS_SSIC_ADDRESS_BLOCK_RXFTLR_DATA__RFT__WIDTH)
@@ -410,6 +438,11 @@ typedef enum {
 	EEPROM_READ = 0x3,
 } TMOD;
 
+enum qspi_ftype {
+    FTYPE_SPANSION = 0,
+	FTYPE_MAX
+};
+
 enum qspi_trans_mode {
 	QSPI_TRANS_MODE_1_1_1 = 0, /* (std, std, std)   */
 	QSPI_TRANS_MODE_1_1_2,	   /* (std, std, dual)  */
@@ -434,20 +467,10 @@ struct qspi_flash_info {
 	uint32_t erase_sect_size;
 };
 
-/*
- * flash specific command information
- */
-struct qspi_cmd_info {
-	uint8_t read;	       /* read command */
-	uint8_t write;	       /* write command */
-	uint8_t chip_erase;    /* chip erase command */
-	uint8_t sect_erase;    /* sector erase command */
-	uint8_t write_enable;  /* write enable command */
-	uint8_t write_disable; /* write disable command */
-	uint8_t read_status;   /* read status command */
-
-	uint8_t busy_bit_pos;  /* busy bit pos in status (WIP) */
-	uint8_t num_addr_bits; /* num of address bits when in xaddr mode */
+struct qspi_rdid_resp {
+	uint8_t mgr_id;
+	uint8_t dev_id;
+	uint8_t cap;
 };
 
 #endif

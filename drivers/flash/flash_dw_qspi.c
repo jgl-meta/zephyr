@@ -70,9 +70,7 @@ struct flash_dw_qspi_config {
 };
 
 struct flash_dw_qspi_data {
-	struct qspi_cmd_info command_info;
-	struct qspi_dev_intf *interface;
-	struct qspi_flash_info info;
+	uint32_t flash_size;
 };
 
 void dw_spi_enable(const bool enable)
@@ -80,13 +78,13 @@ void dw_spi_enable(const bool enable)
 	DW_SPI_SET_REG_FIELD(SSIENR, SSIC_EN, (enable) ? 1 : 0);
 }
 
-bool dw_spi_idle(void)
+bool dw_spi_idle()
 {
 	return (DW_SPI_GET_REG_FIELD(SR, TFE) && DW_SPI_GET_REG_FIELD(SR, TFNF) &&
 		!DW_SPI_GET_REG_FIELD(SR, BUSY));
 }
 
-static int dw_spi_trans_completed(const uint32_t drain_timeout_ms)
+static int32_t dw_spi_trans_completed(const uint32_t drain_timeout_ms)
 {
 	int64_t start_time = k_uptime_get();
 	int64_t uptime;
@@ -99,7 +97,7 @@ static int dw_spi_trans_completed(const uint32_t drain_timeout_ms)
 	return 0;
 }
 
-static int dw_spi_rx_bytes(uint8_t *rx, uint32_t rx_len)
+static int32_t dw_spi_rx_bytes(uint8_t *rx, uint32_t rx_len)
 {
 	uint32_t i;
 	int64_t start_time = k_uptime_get();
@@ -128,19 +126,22 @@ static int dw_spi_rx_bytes(uint8_t *rx, uint32_t rx_len)
 	return 0;
 }
 
-static int dw_spi_tx_bytes(uint8_t *tx, uint32_t tx_len)
+static int32_t dw_spi_tx_bytes(uint8_t *tx, uint32_t tx_len)
 {
 	int ret;
 	uint32_t i;
 	uint32_t data;
 
 	/* as we park everytime after use, we should be idle */
-	if (!dw_spi_idle())
-		return -EPERM;
+	if (!dw_spi_idle()) {
+		ret = -EPERM;
+		goto done;
+	}
 
 	if (tx_len > DW_SPI_TX_FIFO_LEN) {
 		LOG_ERR("Tx len %d greater than max %d\n", tx_len, DW_SPI_TX_FIFO_LEN);
-		return -ERANGE;
+		ret = -ERANGE;
+		goto done;
 	}
 
 	DW_SPI_SET_REG_FIELD(TXFTLR, TFT, 0);
@@ -158,9 +159,12 @@ static int dw_spi_tx_bytes(uint8_t *tx, uint32_t tx_len)
 		LOG_ERR("%s: Timeout %d ms on waiting for %d tx\n", __func__,
 			CONFIG_DW_SPI_DRAIN_TIMEOUT_MS, tx_len);
 	return ret;
+
+done:
+	return ret;
 }
 
-int dw_spi_transfer(const struct device *dev, uint8_t *tx, uint32_t tx_len, uint8_t *rx,
+int32_t dw_spi_transfer(uint8_t *tx, uint32_t tx_len, uint8_t *rx,
 		    uint32_t rx_len)
 {
 	int ret;
@@ -204,22 +208,20 @@ done:
 	return ret;
 }
 
-int dw_spi_proc_completed(const struct device *dev, const uint32_t comp_timeout_ms)
+int32_t dw_spi_proc_completed(const struct device *dev, const uint32_t comp_timeout_ms)
 {
 	int ret;
 	uint8_t cmd, stat;
 	int64_t start_time = k_uptime_get();
 	int64_t uptime;
-	struct flash_dw_qspi_data *qspi_data = (struct flash_dw_qspi_data *)dev->data;
-	struct qspi_cmd_info *p_cmd = &qspi_data->command_info;
 
 	do {
-		cmd = p_cmd->read_status;
-		ret = dw_spi_transfer(dev, &cmd, sizeof(cmd), &stat, sizeof(stat));
+		cmd = QSPI_SPANSION_CMD_READ_STATUS;
+		ret = dw_spi_transfer(&cmd, sizeof(cmd), &stat, sizeof(stat));
 		if (ret)
 			break;
 
-		if (!(stat & (0x1 << p_cmd->busy_bit_pos)))
+		if (!(stat & (0x1 << QSPI_SPANSION_CMD_BUSY_BIT_POS)))
 			break;
 
 		uptime = k_uptime_get();
@@ -230,8 +232,8 @@ int dw_spi_proc_completed(const struct device *dev, const uint32_t comp_timeout_
 	return ret;
 }
 
-static int dw_spi_aligned_write(const struct device *dev, uint8_t cmd_code, uint32_t addr,
-				const ADDR_L addrl, uint8_t *data, uint32_t len)
+static int32_t dw_spi_aligned_write(const struct device *dev, uint8_t cmd_code, uint32_t addr,
+				const ADDR_L addrl, const uint8_t *data, uint32_t len)
 {
 	bool once;
 	uint32_t *w_p = (uint32_t *)data;
@@ -240,7 +242,6 @@ static int dw_spi_aligned_write(const struct device *dev, uint8_t cmd_code, uint
 	int ret = 0;
 	uint32_t spi_frf, clk_stretch;
 	uint8_t command;
-	struct flash_dw_qspi_data *qspi_data = (struct flash_dw_qspi_data *)dev->data;
 	struct flash_dw_qspi_config *cfg = (struct flash_dw_qspi_config *)dev->config;
 
 	/* retrive parameters that need to be restored */
@@ -255,14 +256,8 @@ static int dw_spi_aligned_write(const struct device *dev, uint8_t cmd_code, uint
 		/* always assume 4byte alignment */
 		write_wd = (write_sz >> 2);
 
-		/* Write enable
-		 * Need WEL for every transaction because some flash
-		 * devices reset WEL latch after the write is complete
-		 * The addrl and dfs change will not affect this command
-		 * as it does not have address or data.
-		 */
-		command = qspi_data->command_info.write_enable;
-		ret = dw_spi_transfer(dev, &command, sizeof(command), NULL, 0);
+		command = QSPI_SPANSION_CMD_WRITE_ENABLE;
+		ret = dw_spi_transfer(&command, sizeof(command), NULL, 0);
 		if (ret)
 			break;
 
@@ -346,7 +341,7 @@ void dw_spi_reset()
 	dw_spi_enable(true);
 }
 
-int dw_spi_configure_trans_mode(const enum qspi_trans_mode trans_mode)
+int32_t dw_spi_configure_trans_mode(const enum qspi_trans_mode trans_mode)
 {
 	static const struct {
 		SPI_FRF ffmt;
@@ -440,7 +435,7 @@ void dw_spi_common_init(const struct device *dev)
 	dw_spi_enable(true);
 }
 
-int dw_spi_send_cmd(const struct device *dev, uint8_t cmd_code, uint32_t aux_data, uint32_t dlen)
+int32_t dw_spi_send_cmd(const struct device *dev, uint8_t cmd_code, uint32_t aux_data, uint32_t dlen)
 {
 	int ret;
 	static const ADDR_L tab[] = {
@@ -454,20 +449,406 @@ int dw_spi_send_cmd(const struct device *dev, uint8_t cmd_code, uint32_t aux_dat
 	return ret;
 }
 
-static int flash_dw_qspi_read(const struct device *dev, off_t offset, void *data, size_t len)
+static int32_t enable_xaddr(const struct device *dev)
 {
+	int ret;
+	uint8_t cmd, resp;
 
-	return -ENOSYS;
+	dw_spi_set_xip_addrl(ADDR_L32);
+	ret = dw_spi_send_cmd(dev,
+			      QSPI_SPANSION_CMD_WRITE_EXT_ADDR,
+			      EXT_ADDR_ENABLED, 1);
+	if (ret)
+		goto fail;
+
+	cmd = QSPI_SPANSION_CMD_READ_EXT_ADDR;
+	ret = dw_spi_transfer(&cmd, sizeof(cmd),
+			      &resp, sizeof(resp));
+	if (ret)
+		goto fail;
+
+	if ((resp & EXT_ADDR_ENABLED) != EXT_ADDR_ENABLED) {
+		LOG_ERR("EXT_ADDR not set successfully, val 0x%x\n",
+		      resp);
+		ret = -EACCES;
+	}
+fail:
+	return ret;
 }
 
-static int flash_dw_qspi_write(const struct device *dev, off_t offset, const void *data, size_t len)
+static uint32_t get_flash_size()
 {
-	return -ENOSYS;
+	int ret;
+	uint32_t size = 0;
+	uint8_t command;
+	struct qspi_rdid_resp resp;
+
+	command = QSPI_JEDEC_READ_MFG_ID_COMMAND;
+
+	ret = dw_spi_transfer(&command, sizeof(command),
+			      (uint8_t *)&resp, sizeof(resp));
+	if (ret)
+		goto fail;
+
+	switch (resp.cap) {
+	case 0x20:
+		size = MBYTE_SZ(64);
+		break;
+	case 0x19:
+		size = MBYTE_SZ(32);
+		break;
+	}
+fail:
+	return size;
 }
 
-static int flash_dw_qspi_erase(const struct device *dev, off_t offset, size_t size)
+static int32_t qspi_get_addr_list(const uint32_t addr, const uint32_t len,
+			      uint32_t addr_list[MAX_SUB_ADDR],
+			      uint32_t sizes[MAX_SUB_ADDR])
 {
-	return -ENOSYS;
+	uint32_t num;
+
+	if ((addr < SIZE_16MB) &&
+	    ((addr + len - 1) >= SIZE_16MB)) {
+		num = MAX_SUB_ADDR;
+		addr_list[0] = addr;
+		sizes[0] = SIZE_16MB - (addr & (SIZE_16MB-1));
+		addr_list[1] = addr + sizes[0];
+		sizes[1] = len - sizes[0];
+	} else {
+		num = 1;
+		addr_list[0] = addr;
+		sizes[0] = len;
+	}
+
+	return num;
+}
+
+static int32_t disable_xaddr(const struct device *dev)
+{
+	int ret;
+	ret = dw_spi_send_cmd(dev, QSPI_SPANSION_CMD_WRITE_EXT_ADDR,
+			      EXT_ADDR_DISABLED, 1);
+	dw_spi_set_xip_addrl(ADDR_L24);
+
+	return ret;
+}
+
+static int32_t qspi_pwise_flash_erase(const struct device *dev,
+				  uint32_t address, uint32_t len)
+{
+	int ret = 0;
+	uint8_t i;
+	uint8_t command;
+	uint32_t num_erases;
+	uint8_t is_xaddr = IS_EXT_ADDR(address);
+	uint32_t addr_bytes;
+
+	/* Enter 4 byte mode */
+	(is_xaddr) ? enable_xaddr(dev) : disable_xaddr(dev);
+
+	/* Compute number of erases needed */
+	num_erases = (len + CONFIG_DW_ERASE_SECTION_SIZE - 1) / CONFIG_DW_ERASE_SECTION_SIZE;
+	command = QSPI_SPANSION_CMD_ERASE_256K;
+	addr_bytes = is_xaddr ? XADDR_BYTES : SADDR_BYTES;
+
+	LOG_DBG("%s(): cmd 0x%x Addr 0x%x len 0x%x - ext %d, num_erases %d(0x%x)\n",
+	      __func__, command, address, len, is_xaddr,
+	     num_erases, CONFIG_DW_ERASE_SECTION_SIZE);
+	for (i = 0; i < num_erases; i++) {
+		uint32_t erase_addr;
+
+		/* Erase start address */
+		erase_addr = address + (i * CONFIG_DW_ERASE_SECTION_SIZE);
+
+		ret = dw_spi_send_cmd(dev, command, erase_addr,
+				      addr_bytes);
+		if (ret)
+			break;
+
+		ret = dw_spi_proc_completed(dev, CONFIG_DW_SPI_DRAIN_TIMEOUT_MS);
+		if (ret)
+			break;
+	}
+
+	command = QSPI_SPANSION_CMD_WRITE_DISABLE;
+	dw_spi_transfer(&command, sizeof(command), NULL, 0);
+
+	/* exit extended addr mode */
+	if (is_xaddr)
+		disable_xaddr(dev);
+
+	return ret;
+}
+
+static int32_t qspi_chip_erase(const struct device *dev)
+{
+	int ret = 0;
+	uint32_t num_sect;
+	uint8_t command;
+	struct flash_dw_qspi_data *dd = (struct flash_dw_qspi_data *)dev->data;
+
+	/* First Send write enable latch command */
+	command = QSPI_SPANSION_CMD_WRITE_ENABLE;
+	ret = dw_spi_transfer(&command, sizeof(command), NULL, 0);
+	if (ret)
+		goto done;
+
+	/* Send Chip erase command */
+	command = QSPI_SPANSION_CMD_CHIP_ERASE;
+	num_sect = dd->flash_size / CONFIG_DW_ERASE_SECTION_SIZE;
+	ret = dw_spi_transfer(&command, sizeof(command), NULL, 0);
+	if (ret)
+		goto done;
+
+	ret = dw_spi_proc_completed(dev, num_sect * CONFIG_DW_SPI_DRAIN_TIMEOUT_MS);
+	if (ret)
+		LOG_ERR("%s(): Timeout waiting for flash processing\n", __func__);
+
+	/* Send write disable command */
+	command = QSPI_SPANSION_CMD_WRITE_DISABLE;
+	dw_spi_transfer(&command, sizeof(command), NULL, 0);
+
+done:
+	return ret;
+}
+
+static int32_t flash_dw_qspi_erase(const struct device *dev, off_t address, size_t len)
+{
+	int ret = 0;
+	uint32_t mask;
+	uint32_t sizes[MAX_SUB_ADDR];
+	uint32_t addr_list[MAX_SUB_ADDR];
+	uint32_t num, i;
+	struct flash_dw_qspi_data *dd = (struct flash_dw_qspi_data *)dev->data;
+
+	if (len == 0) {
+		LOG_ERR("Invalid len %zu for erase\n", len);
+		ret = -EPERM;
+		goto done;
+	}
+
+	if (len == dd->flash_size) {
+		ret = qspi_chip_erase(dev);
+		goto done;
+	}
+	else if ((address + len) > dd->flash_size) {
+		ret = -ERANGE;
+		goto done;
+	}
+
+	mask = CONFIG_DW_ERASE_SECTION_SIZE - 1;
+	if ((address & mask) || (len & mask)) {
+		LOG_ERR("Addr 0x%x or len 0x%x alignment issue\n",
+		      (uint32_t)address, (uint32_t)len);
+		ret = -EPERM;
+		goto done;
+	}
+
+	/* Check if the range crosses 16M boundary */
+	num = qspi_get_addr_list(address, len, addr_list, sizes);
+	for (i = 0; i < num; i++) {
+		ret = qspi_pwise_flash_erase(dev, addr_list[i], sizes[i]);
+		if (ret)
+			goto done;
+	}
+
+done:
+	return ret;
+}
+
+static int xip_pwise_read_data(const struct device *dev,
+			       uint32_t address, uint32_t size,
+			       uint8_t *data)
+{
+	int ret = 0;
+	uint8_t *phys_addr;
+	uint32_t i, num_addr_bits;
+	uint8_t is_xaddr = IS_EXT_ADDR(address);
+
+	if (is_xaddr) {
+		num_addr_bits = QSPI_SPANSION_CMD_NUM_ADDR_BITS;
+		if (num_addr_bits != 32) {
+			LOG_ERR("Requesting 32 bit on a flash that supports only %d\n",
+			      num_addr_bits);
+			ret = -EIO;
+			goto done;
+		}
+		enable_xaddr(dev);
+	} else {
+		num_addr_bits = 24;
+		disable_xaddr(dev);
+	}
+
+	phys_addr = (uint8_t *)((address & GET_MASK(num_addr_bits))
+		                 + XIP_MMAPED_START);
+
+	LOG_DBG("%s(): address 0x%x(m:0x%lx) phys_addr %p, four_byte %d\n",
+	      __func__, address, GET_MASK(num_addr_bits), phys_addr, is_xaddr);
+
+	/* do a tight loop cpy here in case no memcpy lib */
+	for (i = 0; i < size; i++)
+		*data++ = *phys_addr++;
+
+	/* Exit 4 byte mode */
+	if (is_xaddr)
+		disable_xaddr(dev);
+
+done:
+	return ret;
+}
+
+static int xip_read_data(const struct device *dev, uint32_t addr,
+			 uint32_t len, uint8_t *data)
+{
+	int ret = 0;
+	int num, i;
+	uint32_t sizes[MAX_SUB_ADDR];
+	uint32_t addr_list[MAX_SUB_ADDR];
+
+	/* Check if address crosses 16M boundary */
+	num = qspi_get_addr_list(addr, len, addr_list, sizes);
+
+	for (i = 0; i < num; i++) {
+		ret = xip_pwise_read_data(dev, addr_list[i],
+					  sizes[i], data);
+		if (ret)
+			break;
+
+		data += sizes[i];
+	}
+
+	return ret;
+}
+
+static int32_t flash_dw_xip_qspi_read(const struct device *dev, off_t address, void *data, size_t len)
+{
+	int ret = 0;
+	struct flash_dw_qspi_data *dd = (struct flash_dw_qspi_data *)dev->data;
+
+	if ((len == 0) || (data == NULL)) {
+		LOG_ERR("Invalid data len or data ptr\n");
+		ret = -EPERM;
+		goto done;
+	}
+
+	/* Destination buffer cannot be in flash */
+	if (((uintptr_t)data >= XIP_MMAPED_START) &&
+	    ((uintptr_t)data < (XIP_MMAPED_START + dd->flash_size))) {
+			ret = -ERANGE;
+			goto done;
+	}
+
+	if ((address + len) > dd->flash_size) {
+		ret = -ERANGE;
+		goto done;
+	}
+
+	ret = xip_read_data(dev, address, len, data);
+
+done:
+	return ret;
+}
+
+int dw_spi_write_data(const struct device *dev, uint32_t addr,
+		      uint32_t len, const uint8_t *data)
+{
+	int ret = 0;
+	uint32_t write_size, remaining, offset;
+	uint8_t command;
+	uint8_t is_xaddr = IS_EXT_ADDR(addr);
+
+	if (!dw_spi_idle()) {
+		ret = -EPERM;
+		goto done;
+	}
+
+	/* Check if we need to enter 4 byte mode */
+	(is_xaddr) ? enable_xaddr(dev) :
+	             disable_xaddr(dev);
+
+	/* Write bytes upto the next 256 byte aligned address */
+	remaining = len;
+	//! TODO remove the FLASH_PAGE_SIZE to use zephyr method
+	write_size = FLASH_PAGE_SIZE - (addr & (FLASH_PAGE_SIZE - 1));
+	write_size = MIN(remaining, write_size);
+	offset = 0;
+	do {
+		const uint8_t *next = data + offset;
+		ret = dw_spi_aligned_write(dev, QSPI_SPANSION_CMD_WRITE,
+					   addr + offset,
+					   is_xaddr ? ADDR_L32 : ADDR_L24,
+					   next, write_size);
+		if (ret)
+			break;
+
+		remaining -= write_size;
+		offset +=  write_size;
+		write_size = MIN(remaining, FLASH_PAGE_SIZE);
+	} while (remaining);
+
+	/* Write Disable */
+	command = QSPI_SPANSION_CMD_WRITE_DISABLE;
+	dw_spi_transfer(&command, sizeof(command), NULL, 0);
+
+	/* Exit 4 byte mode */
+	if (is_xaddr)
+		disable_xaddr(dev);
+
+done:
+	return ret;
+}
+
+static int32_t qspi_write(const struct device *dev, off_t address, const uint8_t *data, size_t len)
+{
+	int32_t ret = 0;
+	uint32_t addr_list[MAX_SUB_ADDR], sizes[MAX_SUB_ADDR];
+	int i, num;
+
+	num = qspi_get_addr_list(address, len, addr_list, sizes);
+	for (i = 0; i < num; i++) {
+		ret = dw_spi_write_data(dev, addr_list[i], sizes[i], data);
+		if (ret)
+			goto done;
+
+		data += sizes[i];
+	}
+done:
+	return ret;
+}
+
+static int32_t flash_dw_qspi_write(const struct device *dev, off_t address, const void *data, size_t len)
+{
+	int ret = 0;
+	struct flash_dw_qspi_data *dd = (struct flash_dw_qspi_data *)dev->data;
+
+	if ((len == 0) || (!data)) {
+		LOG_ERR("Invalid data len %ld or data\n", len);
+		ret = -EPERM;
+		goto done;
+	}
+
+	/* Source buffer cannot be in flash */
+	if (((uintptr_t)data >= XIP_MMAPED_START) &&
+	    ((uintptr_t)data < (XIP_MMAPED_START + dd->flash_size))) {
+		ret = -ERANGE;
+		goto done;
+	}
+
+	if ((address + len) > dd->flash_size) {
+		LOG_ERR("Addr(0x%x) + len(0x%x) > than flash_size(0x%x)\n",
+		      (uint32_t)address, (uint32_t)len, (uint32_t)dd->flash_size);
+		ret = -EPERM;
+		goto done;
+	}
+	ret = qspi_write(dev, address, data, len);
+done:
+	return ret;
+}
+
+static inline void reg32clrbits(uintptr_t addr, uint32_t clear)
+{
+	sys_write32(sys_read32(addr) & ~clear, addr);
 }
 
 static const struct flash_parameters *flash_dw_qspi_get_parameters(const struct device *dev)
@@ -481,17 +862,56 @@ static void flash_dw_qspi_pages_layout(const struct device *dev,
 {
 }
 
-static int flash_dw_qspi_sfdp_read(const struct device *dev, off_t offset, void *data, size_t len)
-{
-	return -ENOSYS;
-}
-static int flash_dw_qspi_read_jedec_id(const struct device *dev, uint8_t *id)
+static int32_t flash_dw_qspi_sfdp_read(const struct device *dev, off_t offset, void *data, size_t len)
 {
 	return -ENOSYS;
 }
 
+static int32_t spansion_sreset()
+{
+	uint8_t command;
+
+	command = QSPI_SPANSION_CMD_SRESET;
+	return dw_spi_transfer(&command, sizeof(command), NULL, 0);
+}
+
+static int32_t flash_dw_qspi_read_jedec_id(const struct device *dev, uint8_t *id)
+{
+	struct qspi_rdid_resp resp;
+	uint8_t command;
+	int32_t ret = 0;
+
+	reg32clrbits(IO_PAD_CONTROL, 1 << CRM_LS_FORCE_OEB_TO_INPUT);
+	dw_spi_common_init(dev);
+
+	command = QSPI_JEDEC_READ_MFG_ID_COMMAND;
+	ret = dw_spi_transfer(&command, sizeof(command),
+			      (uint8_t *)&resp, sizeof(resp));
+	if (ret) {
+		LOG_ERR("SPI TXFR error reading ID:%d\n", ret);
+		goto done;
+	}
+
+	LOG_INF("MFG_ID 0x%x, dev_id 0x%x cap 0x%x for flash detected\n",
+	     resp.mgr_id, resp.dev_id, resp.cap);
+
+	switch (resp.mgr_id) {
+	case QSPI_SPANSION_MFG_ID:
+		ret = FTYPE_SPANSION;
+		break;
+	default:
+		ret = -EPERM;
+		goto done;
+	}
+
+	ret = spansion_sreset();
+
+done:
+	return ret;
+}
+
 static const struct flash_driver_api flash_dw_qspi_api = {
-	.read = flash_dw_qspi_read,
+	.read = flash_dw_xip_qspi_read,
 	.write = flash_dw_qspi_write,
 	.erase = flash_dw_qspi_erase,
 	.get_parameters = flash_dw_qspi_get_parameters,
@@ -504,15 +924,19 @@ static const struct flash_driver_api flash_dw_qspi_api = {
 #endif /* CONFIG_FLASH_JESD216_API */
 };
 
-static int flash_dw_qspi_init(const struct device *dev)
-{
+
+static int32_t flash_dw_qspi_init(const struct device *dev) {
 	printk("HELLO FROM FLASH WORLD\n");
 
 	uint8_t command, resp;
 	int ret = ENOSYS;
 	struct flash_dw_qspi_config *cfg = (struct flash_dw_qspi_config *)dev->config;
+	struct flash_dw_qspi_data *dd = (struct flash_dw_qspi_data *)dev->data;
 
-	dw_spi_common_init(dev);
+	reg32clrbits(IO_PAD_CONTROL, 1 << CRM_LS_FORCE_OEB_TO_INPUT);
+
+	// TODO not sure if this is needed only called in flash enumerate function
+	//dw_spi_common_init(dev);
 
 	dw_spi_enable(false);
 	dw_spi_configure_trans_mode(QSPI_TRANS_MODE_1_1_1);
@@ -533,19 +957,25 @@ static int flash_dw_qspi_init(const struct device *dev)
 	ret = dw_spi_send_cmd(dev, QSPI_SPANSION_CMD_WRR, QSPI_SPANSION_WRR_QUAD_MODE_CMD,
 			      2 /* cfg + stat reg */);
 	if (ret)
-		goto fail;
+		goto done;
 
 	/* read back cfg bits and verify */
 	command = QSPI_SPANSION_CMD_RDCR;
-	ret = dw_spi_transfer(dev, &command, sizeof(command), &resp, sizeof(resp));
+	ret = dw_spi_transfer(&command, sizeof(command), &resp, sizeof(resp));
 	if (ret)
-		goto fail;
+		goto done;
+
+	dd->flash_size = get_flash_size();
+	if (!dd->flash_size) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	LOG_INF("Flash QUAD mode set completed - CR 0x%x\n", resp);
 
 	if (!(resp & (1 << QSPI_SPANSION_CFG_QUAD_BIT_POS)))
 		ret = -EPERM;
-fail:
+done:
 	return ret;
 }
 
@@ -556,7 +986,9 @@ fail:
 		.ahb_freq = DT_INST_PROP(inst, ahb_bus_frequency),                                 \
 		.pp_lanes = DT_INST_PROP(inst, pp_lanes),                                          \
 	};                                                                                         \
+	BUILD_ASSERT(DT_INST_PROP(inst, clock_frequency) != 0);                                  \
 	BUILD_ASSERT(DT_INST_PROP(inst, ahb_bus_frequency) != 0);                                  \
+	BUILD_ASSERT(DT_INST_PROP(inst, pp_lanes) != 0);                                  \
 	DEVICE_DT_INST_DEFINE(inst, flash_dw_qspi_init, NULL, &flash_dw_qspi_data_##inst,          \
 			      &flash_dw_qspi_config_##inst, POST_KERNEL,                           \
 			      CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &flash_dw_qspi_api)
