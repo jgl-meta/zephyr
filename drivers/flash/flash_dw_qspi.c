@@ -207,6 +207,11 @@ done:
 	return ret;
 }
 
+static inline void reg32clrbits(uintptr_t addr, uint32_t clear)
+{
+	sys_write32(sys_read32(addr) & ~clear, addr);
+}
+
 int32_t dw_spi_proc_completed(const struct device *dev, const uint32_t comp_timeout_ms)
 {
 	int ret;
@@ -472,20 +477,59 @@ fail:
 	return ret;
 }
 
-static uint32_t get_flash_size()
+static int32_t spansion_sreset()
+{
+	uint8_t command;
+
+	command = QSPI_SPANSION_CMD_SRESET;
+	return dw_spi_transfer(&command, sizeof(command), NULL, 0);
+}
+
+static int32_t flash_dw_qspi_read_jedec_id(const struct device *dev, uint8_t *id)
+{
+	struct qspi_rdid_resp resp;
+	uint8_t command;
+	int32_t ret = 0;
+
+	reg32clrbits(IO_PAD_CONTROL, 1 << CRM_LS_FORCE_OEB_TO_INPUT);
+	dw_spi_common_init(dev);
+
+	command = QSPI_JEDEC_READ_MFG_ID_COMMAND;
+	ret = dw_spi_transfer(&command, sizeof(command), (uint8_t *)&resp, sizeof(resp));
+	if (ret) {
+		LOG_ERR("SPI TXFR error reading ID:%d\n", ret);
+		goto done;
+	}
+
+	LOG_INF("MFG_ID 0x%x, dev_id 0x%x cap 0x%x for flash detected\n", resp.mgr_id, resp.dev_id,
+		resp.cap);
+
+	switch (resp.mgr_id) {
+	case QSPI_SPANSION_MFG_ID:
+		*id = resp.cap;
+		break;
+	default:
+		ret = -EPERM;
+		goto done;
+	}
+
+	ret = spansion_sreset();
+
+done:
+	return ret;
+}
+
+static uint32_t get_flash_size(const struct device *dev)
 {
 	int ret;
 	uint32_t size = 0;
-	uint8_t command;
-	struct qspi_rdid_resp resp;
+	uint8_t id = 0;
 
-	command = QSPI_JEDEC_READ_MFG_ID_COMMAND;
-
-	ret = dw_spi_transfer(&command, sizeof(command), (uint8_t *)&resp, sizeof(resp));
+	ret = flash_dw_qspi_read_jedec_id(dev, &id);
 	if (ret)
 		goto fail;
 
-	switch (resp.cap) {
+	switch (id) {
 	case 0x20:
 		size = MBYTE_SZ(64);
 		break;
@@ -828,11 +872,6 @@ done:
 	return ret;
 }
 
-static inline void reg32clrbits(uintptr_t addr, uint32_t clear)
-{
-	sys_write32(sys_read32(addr) & ~clear, addr);
-}
-
 static const struct flash_parameters *flash_dw_qspi_get_parameters(const struct device *dev)
 {
 	return NULL;
@@ -848,48 +887,6 @@ static int32_t flash_dw_qspi_sfdp_read(const struct device *dev, off_t offset, v
 				       size_t len)
 {
 	return -ENOSYS;
-}
-
-static int32_t spansion_sreset()
-{
-	uint8_t command;
-
-	command = QSPI_SPANSION_CMD_SRESET;
-	return dw_spi_transfer(&command, sizeof(command), NULL, 0);
-}
-
-static int32_t flash_dw_qspi_read_jedec_id(const struct device *dev, uint8_t *id)
-{
-	struct qspi_rdid_resp resp;
-	uint8_t command;
-	int32_t ret = 0;
-
-	reg32clrbits(IO_PAD_CONTROL, 1 << CRM_LS_FORCE_OEB_TO_INPUT);
-	dw_spi_common_init(dev);
-
-	command = QSPI_JEDEC_READ_MFG_ID_COMMAND;
-	ret = dw_spi_transfer(&command, sizeof(command), (uint8_t *)&resp, sizeof(resp));
-	if (ret) {
-		LOG_ERR("SPI TXFR error reading ID:%d\n", ret);
-		goto done;
-	}
-
-	LOG_INF("MFG_ID 0x%x, dev_id 0x%x cap 0x%x for flash detected\n", resp.mgr_id, resp.dev_id,
-		resp.cap);
-
-	switch (resp.mgr_id) {
-	case QSPI_SPANSION_MFG_ID:
-		ret = FTYPE_SPANSION;
-		break;
-	default:
-		ret = -EPERM;
-		goto done;
-	}
-
-	ret = spansion_sreset();
-
-done:
-	return ret;
 }
 
 static const struct flash_driver_api flash_dw_qspi_api = {
@@ -947,7 +944,7 @@ static int32_t flash_dw_qspi_init(const struct device *dev)
 	if (ret)
 		goto done;
 
-	dd->flash_size = get_flash_size();
+	dd->flash_size = get_flash_size(dev);
 	if (!dd->flash_size) {
 		ret = -EINVAL;
 		goto done;
