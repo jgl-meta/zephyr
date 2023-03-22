@@ -36,4 +36,10 @@ config FLASH_JESD216_API
 	help
 		Enables the JESD216 api functions.
 
+config FLASH_PAGE_SIZE
+	int "Page size the driver will use when reading and writing"
+	default 256
+	help
+		Sets the size of the page.
+
 endif

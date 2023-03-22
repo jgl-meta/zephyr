@@ -796,8 +796,7 @@ int dw_spi_write_data(const struct device *dev, uint32_t addr, uint32_t len, con
 
 	/* Write bytes upto the next 256 byte aligned address */
 	remaining = len;
-	//! TODO remove the FLASH_PAGE_SIZE to use zephyr method
-	write_size = FLASH_PAGE_SIZE - (addr & (FLASH_PAGE_SIZE - 1));
+	write_size = CONFIG_FLASH_PAGE_SIZE - (addr & (CONFIG_FLASH_PAGE_SIZE - 1));
 	write_size = MIN(remaining, write_size);
 	offset = 0;
 	do {
@@ -809,7 +808,7 @@ int dw_spi_write_data(const struct device *dev, uint32_t addr, uint32_t len, con
 
 		remaining -= write_size;
 		offset += write_size;
-		write_size = MIN(remaining, FLASH_PAGE_SIZE);
+		write_size = MIN(remaining, CONFIG_FLASH_PAGE_SIZE);
 	} while (remaining);
 
 	/* Write Disable */
@@ -877,11 +876,23 @@ static const struct flash_parameters *flash_dw_qspi_get_parameters(const struct 
 	return NULL;
 }
 
+#if defined(CONFIG_FLASH_PAGE_LAYOUT)
+
+static const struct flash_pages_layout dev_layout = {
+	// page count set in init
+	.pages_count = 0,
+	.pages_size = CONFIG_FLASH_PAGE_SIZE,
+};
+
 static void flash_dw_qspi_pages_layout(const struct device *dev,
 				       const struct flash_pages_layout **layout,
 				       size_t *layout_size)
 {
+	*layout = &dev_layout;
+	*layout_size = 1;
 }
+
+#endif
 
 static int32_t flash_dw_qspi_sfdp_read(const struct device *dev, off_t offset, void *data,
 				       size_t len)
@@ -946,9 +957,19 @@ static int32_t flash_dw_qspi_init(const struct device *dev)
 
 	dd->flash_size = get_flash_size(dev);
 	if (!dd->flash_size) {
+		LOG_ERR("Flash size not found");
 		ret = -EINVAL;
 		goto done;
 	}
+
+#if defined(CONFIG_FLASH_PAGE_LAYOUT)
+	dev_layout->pages_count = dd->flash_size / dev_layout->pages_size;
+	if (dd->flash_size % dev_layout->pages_size) {
+		LOG_ERR("Flash size is not a mutliple of page size.");
+		ret = -EINVAL;
+		goto done;
+	}
+#endif
 
 	LOG_INF("Flash QUAD mode set completed - CR 0x%x\n", resp);
 
