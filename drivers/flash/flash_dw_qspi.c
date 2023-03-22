@@ -878,7 +878,7 @@ static const struct flash_parameters *flash_dw_qspi_get_parameters(const struct 
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 
-static const struct flash_pages_layout dev_layout = {
+static struct flash_pages_layout dev_layout = {
 	// page count set in init
 	.pages_count = 0,
 	.pages_size = CONFIG_FLASH_PAGE_SIZE,
@@ -963,8 +963,8 @@ static int32_t flash_dw_qspi_init(const struct device *dev)
 	}
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
-	dev_layout->pages_count = dd->flash_size / dev_layout->pages_size;
-	if (dd->flash_size % dev_layout->pages_size) {
+	dev_layout.pages_count = dd->flash_size / dev_layout.pages_size;
+	if (dd->flash_size % dev_layout.pages_size) {
 		LOG_ERR("Flash size is not a mutliple of page size.");
 		ret = -EINVAL;
 		goto done;
