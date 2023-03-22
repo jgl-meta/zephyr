@@ -905,7 +905,7 @@ static const struct flash_driver_api flash_dw_qspi_api = {
 
 static int32_t flash_dw_qspi_init(const struct device *dev)
 {
-	printk("HELLO FROM FLASH WORLD\n");
+	printk("Loading Designware QSPI and Spansion Flash\n");
 
 	uint8_t command, resp;
 	int ret = ENOSYS;
