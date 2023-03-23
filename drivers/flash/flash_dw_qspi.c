@@ -873,7 +873,15 @@ done:
 
 static const struct flash_parameters *flash_dw_qspi_get_parameters(const struct device *dev)
 {
-	return NULL;
+	ARG_UNUSED(dev);
+
+	static const struct flash_parameters qspi_flash_parameters = {
+		.write_block_size = MAX_BYTE_PER_TRANS,
+		// not used
+		.erase_value = 0,
+	};
+
+	return &qspi_flash_parameters;
 }
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
