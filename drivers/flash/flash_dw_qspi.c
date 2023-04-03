@@ -464,7 +464,7 @@ static int32_t enable_xaddr(const struct device *dev)
 	if (ret)
 		goto fail;
 
-	cmd = QSPI_SPANSION_CMD_READ_EXT_ADDR;
+	cmd = QSPI_SPANSION_CMD_ENABLE_EXT_ADDR;
 	ret = dw_spi_transfer(&cmd, sizeof(cmd), &resp, sizeof(resp));
 	if (ret)
 		goto fail;
@@ -564,7 +564,7 @@ static int32_t qspi_get_addr_list(const uint32_t addr, const uint32_t len,
 static int32_t disable_xaddr(const struct device *dev)
 {
 	int ret;
-	ret = dw_spi_send_cmd(dev, QSPI_SPANSION_CMD_WRITE_EXT_ADDR, EXT_ADDR_DISABLED, 1);
+	ret = dw_spi_send_cmd(dev, QSPI_SPANSION_CMD_DISABLE_EXT_ADDR, EXT_ADDR_DISABLED, 1);
 	dw_spi_set_xip_addrl(ADDR_L24);
 
 	return ret;
@@ -721,8 +721,7 @@ static int xip_pwise_read_data(const struct device *dev, uint32_t address, uint3
 		*data++ = *phys_addr++;
 
 	/* Exit 4 byte mode */
-	if (is_xaddr)
-		disable_xaddr(dev);
+	disable_xaddr(dev);
 
 done:
 	return ret;
