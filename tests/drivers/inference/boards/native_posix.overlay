@@ -1,0 +1,4 @@
+&pe0 {
+    status = "okay";
+    label = "pe_array_0";
+};

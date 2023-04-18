@@ -1,0 +1,24 @@
+# Copyright (c) 2023 Meta Platforms Inc. and affiliates.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+description: Meta Processing Element Array for Inference Accelerators
+
+compatible: "meta,pe-array"
+
+# technically, both this and meta,pe-array-emul could both depend on a shared yaml but I'm not
+# exactly sure how common that is. The main difference between this and the other is that this
+# requires interrupts.
+include: [base.yaml]
+
+properties:
+    reg:
+      required: true
+
+    array-size:
+      type: int
+      required: true
+      description: Number of processing elements
+
+    interrupts:
+      required: true

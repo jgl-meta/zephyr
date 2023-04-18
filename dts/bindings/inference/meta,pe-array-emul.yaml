@@ -1,0 +1,19 @@
+	
+# Copyright (c) 2023 Meta Platforms Inc. and affiliates.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+description: Meta Processing Element Array for Inference Accelerators (Emulator)
+
+compatible: "meta,pe-array-emul"
+
+include: [base.yaml]
+
+properties:
+    reg:
+      required: true
+
+    array-size:
+      type: int
+      required: true
+      description: Number of processing elements

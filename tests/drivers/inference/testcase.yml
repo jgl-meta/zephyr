@@ -1,0 +1,4 @@
+tests:
+  drivers.inference:
+    depends_on: inference
+    tags: drivers PE inference
